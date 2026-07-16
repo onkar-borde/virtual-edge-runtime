@@ -259,6 +259,24 @@ class FakeTransport(Transport):
         handler = getattr(self, f"_cmd_{cmd.lower()}", None)
         if handler is None:
             return f"ERR unknown command {cmd}"
+
+        # Pin validity is checked here, in dispatch, before the handler runs
+        # -- exactly where the .ino checks it. It used to be checked inside
+        # the handlers, which reported "bad arguments" where the real board
+        # reports "pin out of range". Two different errors for one mistake,
+        # so `except PinError` worked on the fake and missed on real
+        # hardware. The conformance suite caught it; keep the structures
+        # aligned and it stays caught.
+        if cmd not in ("PING", "INFO", "STOP"):
+            if not args:
+                return f"ERR bad arguments for {cmd}"
+            try:
+                pin = int(args[0])
+            except ValueError:
+                return f"ERR bad arguments for {cmd}"
+            if not 0 <= pin <= MAX_PIN:
+                return f"ERR pin {pin} out of range"
+
         try:
             return handler(args)
         except (ValueError, IndexError):

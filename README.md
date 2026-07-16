@@ -1,6 +1,6 @@
 # Virtual Edge Runtime
 
-![tests](https://github.com/onkar-borde/virtual-edge-runtime/actions/workflows/ci.yml/badge.svg)
+![tests](https://github.com/USER-NAME/virtual-edge-runtime/actions/workflows/ci.yml/badge.svg)
 
 Write edge AI and robotics code once. Run it on a laptop, a Raspberry Pi, a Jetson, an Android phone, or a laptop bridged to an ESP32 over USB — without changing a line of application code.
 
@@ -24,6 +24,26 @@ The gap isn't compute. It's **physical I/O**. A Pi has a 40-pin header; a laptop
 So: laptop as the brain, a ~₹400 ESP32 as the nervous system, USB in between. This split (host does perception + decisions, MCU does hard real-time control) is standard practice on dedicated SBC robots too — a general-purpose OS is bad at microsecond-accurate PWM regardless of how fast the CPU is.
 
 What's missing from the ecosystem isn't the pattern. It's that nobody packages it as a **reusable abstraction** — every project rebuilds it, hardcoded, single-robot, unportable. That's the gap this fills.
+
+## Conformance: the abstraction is measured, not claimed
+
+`tests/test_conformance.py` runs **one set of assertions against every backend**:
+
+| | mock | esp32-fake | esp32-real |
+|---|---|---|---|
+| what it is | a Python dict | the firmware's rules in Python | an actual board on USB |
+| needs hardware | no | no | yes (`--hardware`) |
+
+```bash
+pytest tests/test_conformance.py              # simulations
+pytest tests/test_conformance.py --hardware   # + your real ESP32
+```
+
+If `write(13, HIGH)` then `read(13)` returns `HIGH` on all three, the abstraction is a *measured property*, not a design intention. Errors are part of the contract too: the same mistake must raise the same exception type everywhere, or application error handling isn't portable and the abstraction only holds on the happy path.
+
+**A backend is supported when it passes this file.** Not when it feels close.
+
+It earned its keep on the first run by catching a divergence: `setup(999)` raised `PinError` on mock but `TransportError` on the ESP32, because the Python fake validated pins in a different place than the C++ firmware does. The fake was lying about the hardware — the one thing a fake must never do.
 
 ## Scope: this does not emulate a Raspberry Pi
 
@@ -66,7 +86,7 @@ A platform is "supported" when it passes the HAL conformance suite. Not when it 
 ```bash
 git clone <repo> && cd virtual-edge-runtime
 pip install -e ".[dev]"
-pytest                      # 69 tests, no hardware required
+pytest                      # 132 tests, no hardware required
 python examples/blink.py
 ```
 
