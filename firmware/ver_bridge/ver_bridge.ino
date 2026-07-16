@@ -17,9 +17,10 @@
  */
 
 #include <Arduino.h>
+#include <Wire.h>
 
 #define FW_NAME     "ver_bridge"
-#define FW_PROTOCOL 1
+#define FW_PROTOCOL 2
 #define BAUD        115200
 #define MAX_PIN     39
 
@@ -27,6 +28,10 @@
 // Python script must not leave a motor running into a wall. This is the
 // single most important thing in this file.
 #define WATCHDOG_MS 1000
+
+// I2C. Registers and addresses travel as hex, matching every datasheet
+// you'll have open next to this.
+#define I2C_MAX_BYTES 64
 
 // PWM: the ESP32 has 16 LEDC channels. We hand them out on demand.
 #define PWM_RESOLUTION 10        // 0..1023, matches PWM_MAX in protocol.py
@@ -54,6 +59,7 @@ uint32_t lastCommandMs = 0;
 bool     watchdogTripped = false;
 
 String   inputLine;
+bool     i2cReady = false;
 
 // ---------------------------------------------------------------- helpers
 
@@ -129,6 +135,75 @@ void stopAll() {
       digitalWrite(pin, LOW);
     }
   }
+}
+
+// -------------------------------------------------------------------- i2c
+
+void handleI2cInit(int sda, int scl, int khz) {
+  Wire.begin(sda, scl, (uint32_t)khz * 1000UL);
+  i2cReady = true;
+  Serial.println("OK");
+}
+
+void handleI2cScan() {
+  if (!i2cReady) { Serial.println("ERR i2c not initialised"); return; }
+  Serial.print("OK");
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf(" %02X", addr);
+    }
+  }
+  Serial.println();
+}
+
+void handleI2cRead(int addr, int reg, int len) {
+  if (!i2cReady) { Serial.println("ERR i2c not initialised"); return; }
+  if (len < 1 || len > I2C_MAX_BYTES) {
+    Serial.println("ERR i2c length out of range");
+    return;
+  }
+
+  // Repeated START, not STOP-then-START: a stop between the register write
+  // and the read lets another master interleave, and some chips reset their
+  // internal pointer on a stop. endTransmission(false) keeps the bus held.
+  Wire.beginTransmission((uint8_t)addr);
+  Wire.write((uint8_t)reg);
+  if (Wire.endTransmission(false) != 0) {
+    Serial.printf("ERR i2c nack at %02X\n", addr);
+    return;
+  }
+
+  uint8_t got = Wire.requestFrom((uint8_t)addr, (uint8_t)len, (uint8_t)true);
+  if (got != len) {
+    Serial.printf("ERR i2c short read at %02X (%d of %d)\n", addr, got, len);
+    return;
+  }
+
+  Serial.print("OK ");
+  while (Wire.available()) {
+    Serial.printf("%02X", Wire.read());
+  }
+  Serial.println();
+}
+
+void handleI2cWrite(int addr, int reg, const String& hexData) {
+  if (!i2cReady) { Serial.println("ERR i2c not initialised"); return; }
+  if (hexData.length() % 2 != 0 || hexData.length() / 2 > I2C_MAX_BYTES) {
+    Serial.println("ERR i2c bad payload");
+    return;
+  }
+
+  Wire.beginTransmission((uint8_t)addr);
+  Wire.write((uint8_t)reg);
+  for (size_t i = 0; i < hexData.length(); i += 2) {
+    Wire.write((uint8_t)strtol(hexData.substring(i, i + 2).c_str(), NULL, 16));
+  }
+  if (Wire.endTransmission() != 0) {
+    Serial.printf("ERR i2c nack at %02X\n", addr);
+    return;
+  }
+  Serial.println("OK");
 }
 
 // ---------------------------------------------------------------- commands
@@ -247,6 +322,30 @@ void dispatch(String line) {
   }
 
   if (cmd == "STOP") { stopAll(); Serial.println("OK"); return; }
+
+  if (cmd == "I2CSCAN") { handleI2cScan(); return; }
+
+  if (cmd == "I2CINIT") {
+    if (n < 4) { Serial.println("ERR bad arguments for I2CINIT"); return; }
+    handleI2cInit(tok[1].toInt(), tok[2].toInt(), tok[3].toInt());
+    return;
+  }
+
+  if (cmd == "I2CREAD") {
+    if (n < 4) { Serial.println("ERR bad arguments for I2CREAD"); return; }
+    handleI2cRead(strtol(tok[1].c_str(), NULL, 16),
+                  strtol(tok[2].c_str(), NULL, 16),
+                  tok[3].toInt());
+    return;
+  }
+
+  if (cmd == "I2CWRITE") {
+    if (n < 3) { Serial.println("ERR bad arguments for I2CWRITE"); return; }
+    handleI2cWrite(strtol(tok[1].c_str(), NULL, 16),
+                   strtol(tok[2].c_str(), NULL, 16),
+                   n > 3 ? tok[3] : String(""));
+    return;
+  }
 
   // Everything past here needs a pin argument.
   if (n < 2) { Serial.printf("ERR bad arguments for %s\n", cmd.c_str()); return; }

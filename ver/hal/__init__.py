@@ -5,6 +5,7 @@ from .base import (
     VirtualCamera,
     VirtualDevice,
     VirtualGPIO,
+    VirtualI2C,
     VirtualIMU,
     VirtualMotor,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "Backend",
     "VirtualDevice",
     "VirtualGPIO",
+    "VirtualI2C",
     "VirtualIMU",
     "VirtualCamera",
     "VirtualMotor",

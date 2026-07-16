@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ...hal.base import Backend, VirtualGPIO, VirtualMotor
+from ...hal.base import Backend, VirtualGPIO, VirtualI2C, VirtualMotor
 from ...hal.errors import DeviceNotFound, PinError, TransportError, UnsupportedCapability
 from ...hal.types import DeviceInfo, PinMode, PinState
 from . import protocol
-from .protocol import BAUD, PROTOCOL_VERSION
+from .protocol import BAUD, I2C_KHZ, I2C_SCL, I2C_SDA, PROTOCOL_VERSION
 from .transport import FakeTransport, SerialTransport, Transport, find_ports
 
 
@@ -94,6 +94,77 @@ class ESP32GPIO(VirtualGPIO):
             platform="esp32",
             transport=self._t.describe(),
             details={"configured_pins": len(self._modes)},
+        )
+
+
+class ESP32I2C(VirtualI2C):
+    """An I2C bus hanging off the ESP32, reached over serial.
+
+    Shares the GPIO object's transport rather than opening a second one:
+    one board, one port, one conversation. Two transports on one COM port
+    read each other's replies.
+    """
+
+    def __init__(self, gpio: "ESP32GPIO", sda: int = I2C_SDA, scl: int = I2C_SCL,
+                 khz: int = I2C_KHZ):
+        self._gpio = gpio
+        self.sda = sda
+        self.scl = scl
+        self.khz = khz
+        self._ready = False
+
+    def open(self) -> None:
+        if not self._gpio.is_open:
+            self._gpio.open()
+        self._gpio._command(protocol.encode("I2CINIT", self.sda, self.scl, self.khz))
+        self._ready = True
+
+    def close(self) -> None:
+        self._ready = False
+
+    @property
+    def is_open(self) -> bool:
+        return self._ready and self._gpio.is_open
+
+    def _require_open(self):
+        if not self.is_open:
+            raise TransportError("i2c bus used before open()")
+
+    def scan(self) -> list[int]:
+        self._require_open()
+        reply = self._gpio._command("I2CSCAN")
+        if not reply:
+            return []
+        return sorted(int(token, 16) for token in reply.split())
+
+    def read(self, address: int, register: int, length: int = 1) -> bytes:
+        self._require_open()
+        if not 1 <= length <= 64:
+            raise ValueError(f"length {length} outside 1..64")
+        reply = self._gpio._command(
+            protocol.encode("I2CREAD", f"{address:02X}", f"{register:02X}", length)
+        )
+        data = protocol.bytes_from_wire(reply or "")
+        if len(data) != length:
+            raise TransportError(
+                f"asked {address:#04x} for {length} bytes, got {len(data)}"
+            )
+        return data
+
+    def write(self, address: int, register: int, data: bytes) -> None:
+        self._require_open()
+        if len(data) > 64:
+            raise ValueError("i2c write longer than 64 bytes")
+        self._gpio._command(
+            protocol.encode("I2CWRITE", f"{address:02X}", f"{register:02X}",
+                            protocol.bytes_to_wire(bytes(data)))
+        )
+
+    def info(self) -> DeviceInfo:
+        return DeviceInfo(
+            backend="esp32", platform="esp32",
+            transport=self._gpio._t.describe(),
+            details={"sda": self.sda, "scl": self.scl, "khz": self.khz},
         )
 
 
@@ -219,6 +290,20 @@ class ESP32Backend(Backend):
             self._gpio = ESP32GPIO(self._transport())
         return self._gpio
 
+    def i2c(self, **kwargs) -> VirtualI2C:
+        return ESP32I2C(self.gpio(), **kwargs)
+
+    def imu(self, address: int = 0x68, **kwargs):
+        """An MPU6050 on the I2C bus, if one is wired up.
+
+        Note what this is: a driver, not a backend feature. It's written
+        against VirtualI2C, so the identical class serves a Raspberry Pi's
+        native bus the day that backend exists.
+        """
+        from ...drivers.mpu6050 import MPU6050
+
+        return MPU6050(self.i2c(**kwargs), address=address)
+
     def motor(self, forward_pin: int, reverse_pin: int, enable_pin: int,
               **kwargs) -> VirtualMotor:
         gpio = self.gpio()
@@ -230,11 +315,22 @@ class ESP32Backend(Backend):
             "webcam, or VER_BACKEND=mock."
         )
 
-    def imu(self, **kwargs):
-        raise UnsupportedCapability(
-            "no IMU yet. an I2C IMU (MPU6050) needs firmware support -- "
-            "that's the next milestone."
-        )
+    def close(self) -> None:
+        """Close the serial port.
+
+        Every device this backend hands out -- gpio, i2c, motors -- shares
+        one transport, because one board means one port means one
+        conversation. That makes the backend the only thing that can
+        legitimately close it: ESP32I2C.close() must not, since the GPIO
+        object may still be live on the same wire.
+
+        Which is exactly the bug that was here: i2c.close() flipped a flag
+        and left COM9 held open forever. Runtime.shutdown() leaked the port,
+        and the next process to want the board got "Access is denied".
+        """
+        if self._gpio is not None:
+            self._gpio.close()
+            self._gpio = None
 
     def info(self) -> DeviceInfo:
         ports = find_ports()

@@ -15,6 +15,7 @@ from .hal import (
     VERError,
     VirtualCamera,
     VirtualGPIO,
+    VirtualI2C,
     VirtualIMU,
     VirtualMotor,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "Frame",
     "DeviceInfo",
     "VirtualGPIO",
+    "VirtualI2C",
     "VirtualIMU",
     "VirtualCamera",
     "VirtualMotor",

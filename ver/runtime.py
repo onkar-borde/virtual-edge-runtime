@@ -15,7 +15,14 @@ from __future__ import annotations
 from typing import Optional, Type
 
 from .backends import registry
-from .hal.base import Backend, VirtualCamera, VirtualGPIO, VirtualIMU, VirtualMotor
+from .hal.base import (
+    Backend,
+    VirtualCamera,
+    VirtualGPIO,
+    VirtualI2C,
+    VirtualIMU,
+    VirtualMotor,
+)
 from .hal.types import DeviceInfo
 
 
@@ -58,6 +65,9 @@ class Runtime:
     def motor(self, **kwargs) -> VirtualMotor:
         return self._track(self._backend.motor(**kwargs))
 
+    def i2c(self, **kwargs) -> VirtualI2C:
+        return self._track(self._backend.i2c(**kwargs))
+
     def shutdown(self) -> None:
         """Close every device this runtime handed out. Motors stop first."""
         for device in reversed(self._devices):
@@ -73,6 +83,13 @@ class Runtime:
             except Exception:
                 pass
         self._devices.clear()
+        # Devices don't own the transport underneath them -- the backend
+        # does. Without this, an ESP32's serial port survives shutdown() and
+        # the next process to want the board is told "Access is denied".
+        try:
+            self._backend.close()
+        except Exception:
+            pass
 
     def __enter__(self) -> "Runtime":
         return self

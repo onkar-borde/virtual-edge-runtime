@@ -55,9 +55,39 @@ def test_laptop_reports_honest_platform_info():
 
 # ------------------------------------------------------ capability routing
 
-def test_laptop_never_claims_an_imu():
+@needs_no_board
+def test_no_imu_without_a_bridge():
+    """A bare laptop has no IMU and must say so."""
     with pytest.raises(UnsupportedCapability, match="mock"):
         LaptopBackend().imu()
+
+
+@needs_board
+def test_imu_routes_through_the_board_when_present():
+    """With an ESP32 attached, a laptop *does* have an IMU -- whatever is
+    wired to the bridge's I2C bus. This test used to assert the opposite,
+    which was true right up until I2C landed. Tests that encode a temporary
+    limitation as a permanent rule fail the moment the limitation lifts.
+    """
+    from ver.drivers.mpu6050 import MPU6050
+
+    assert isinstance(LaptopBackend().imu(), MPU6050)
+
+
+def test_imu_delegates_to_the_bridge():
+    """No hardware needed: port='fake' runs the firmware simulation, with a
+    simulated MPU6050 sitting on the simulated bus."""
+    imu = LaptopBackend(port="fake").imu()
+    imu.open()
+    assert imu.read().accel.z > 5.0
+    imu.close()
+
+
+def test_i2c_delegates_to_the_bridge():
+    bus = LaptopBackend(port="fake").i2c()
+    bus.open()
+    assert 0x68 in bus.scan()
+    bus.close()
 
 
 @needs_no_board

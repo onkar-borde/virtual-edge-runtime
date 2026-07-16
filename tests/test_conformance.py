@@ -65,6 +65,17 @@ def _backends():
     return params
 
 
+@pytest.fixture(scope="session")
+def real_board():
+    """One connection per session. Opening the port resets the ESP32 and
+    costs ~3s; there is one board, so there is one connection."""
+    from ver.backends.esp32.backend import ESP32Backend
+
+    backend = ESP32Backend()
+    yield backend
+    backend.close()
+
+
 @pytest.fixture(params=_backends())
 def gpio(request):
     """A live VirtualGPIO from each backend under test.
@@ -85,10 +96,10 @@ def gpio(request):
         from ver.backends.esp32.backend import ESP32Backend
 
         device = ESP32Backend(port="fake").gpio()
+        backend = None
     else:
-        from ver.backends.esp32.backend import ESP32Backend
-
-        device = ESP32Backend().gpio()
+        backend = request.getfixturevalue("real_board")
+        device = backend.gpio()
 
     device.open()
     yield device

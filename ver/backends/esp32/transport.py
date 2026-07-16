@@ -17,6 +17,8 @@ that's a bug in one of them, and the tests are how we find out which.
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -24,7 +26,17 @@ from typing import Optional
 
 from ...hal.errors import DeviceNotFound, TransportError
 from . import protocol
-from .protocol import ADC_MAX, BAUD, DEFAULT_TIMEOUT, FIRMWARE_NAME, PROTOCOL_VERSION, PWM_MAX
+from .protocol import (
+    ADC_MAX,
+    BAUD,
+    DEFAULT_TIMEOUT,
+    FIRMWARE_NAME,
+    I2C_KHZ,
+    I2C_SCL,
+    I2C_SDA,
+    PROTOCOL_VERSION,
+    PWM_MAX,
+)
 
 MAX_PIN = 39
 
@@ -34,6 +46,10 @@ RESERVED_PINS = {
     6: "flash", 7: "flash", 8: "flash", 9: "flash", 10: "flash", 11: "flash",
 }
 INPUT_ONLY_PINS = {34, 35, 36, 37, 38, 39}
+
+
+class _I2CNotReady(Exception):
+    """Internal: I2CINIT hasn't run. Mirrors the firmware's own check."""
 
 
 class Transport(ABC):
@@ -65,11 +81,16 @@ class SerialTransport(Transport):
     """
 
     def __init__(self, port: str, baud: int = BAUD, timeout: float = DEFAULT_TIMEOUT,
-                 reset_delay: float = 3.0):
+                 reset_delay: float = 3.0, echo: bool | None = None):
         self.port = port
         self.baud = baud
         self.timeout = timeout
         self.reset_delay = reset_delay
+        # VER_DEBUG=1 prints every line in both directions. The whole reason
+        # the protocol is readable ASCII is so that this is possible -- when
+        # the code looks right and the hardware disagrees, the wire is the
+        # only witness that isn't guessing.
+        self.echo = (os.environ.get("VER_DEBUG") == "1") if echo is None else echo
         self._serial = None
         self._lock = threading.Lock()
 
@@ -175,9 +196,14 @@ class SerialTransport(Transport):
             raise TransportError("transport used before open()")
         with self._lock:
             try:
+                if self.echo:
+                    print(f"  -> {line}", file=sys.stderr, flush=True)
                 self._serial.write(f"{line}\n".encode("ascii"))
                 self._serial.flush()
                 raw = self._serial.readline()
+                if self.echo:
+                    shown = raw.decode("ascii", "replace").strip()
+                    print(f"  <- {shown or '(timeout)'}", file=sys.stderr, flush=True)
             except Exception as exc:
                 raise TransportError(f"serial link failed on {self.port}: {exc}") from exc
 
@@ -209,13 +235,20 @@ class FakeTransport(Transport):
     if you forgot.
     """
 
-    def __init__(self):
+    def __init__(self, devices=None):
+        from .fake_devices import DEFAULT_DEVICES
+
         self._open = False
         self.modes: dict[int, str] = {}
         self.states: dict[int, int] = {}
         self.pwm: dict[int, tuple[int, int]] = {}
         self.log: list[str] = []
         self.stopped = False
+        self.i2c_ready = False
+        # A simulated bus with simulated chips on it, so the real drivers
+        # get exercised with no hardware present.
+        cls_list = DEFAULT_DEVICES if devices is None else devices
+        self.i2c_devices = {d.address: d for d in (c() for c in cls_list)}
 
     def open(self) -> None:
         self._open = True
@@ -267,7 +300,7 @@ class FakeTransport(Transport):
         # so `except PinError` worked on the fake and missed on real
         # hardware. The conformance suite caught it; keep the structures
         # aligned and it stays caught.
-        if cmd not in ("PING", "INFO", "STOP"):
+        if cmd not in ("PING", "INFO", "STOP") and not cmd.startswith("I2C"):
             if not args:
                 return f"ERR bad arguments for {cmd}"
             try:
@@ -279,6 +312,8 @@ class FakeTransport(Transport):
 
         try:
             return handler(args)
+        except _I2CNotReady:
+            return "ERR i2c not initialised"
         except (ValueError, IndexError):
             return f"ERR bad arguments for {cmd}"
 
@@ -333,6 +368,41 @@ class FakeTransport(Transport):
         if self.modes.get(pin) != "analog":
             return f"ERR pin {pin} not configured as analog"
         return f"OK {ADC_MAX // 2}"
+
+    # --- i2c ---
+
+    def _cmd_i2cinit(self, args) -> str:
+        self.i2c_ready = True
+        return "OK"
+
+    def _require_i2c(self):
+        if not self.i2c_ready:
+            raise _I2CNotReady()
+
+    def _cmd_i2cscan(self, args) -> str:
+        self._require_i2c()
+        found = " ".join(f"{a:02X}" for a in sorted(self.i2c_devices))
+        return f"OK {found}" if found else "OK"
+
+    def _cmd_i2cread(self, args) -> str:
+        self._require_i2c()
+        addr, reg, length = int(args[0], 16), int(args[1], 16), int(args[2])
+        device = self.i2c_devices.get(addr)
+        if device is None:
+            return f"ERR i2c nack at {addr:02X}"
+        if not 1 <= length <= 64:
+            return "ERR i2c length out of range"
+        return f"OK {protocol.bytes_to_wire(device.read(reg, length))}"
+
+    def _cmd_i2cwrite(self, args) -> str:
+        self._require_i2c()
+        addr, reg = int(args[0], 16), int(args[1], 16)
+        data = protocol.bytes_from_wire(args[2] if len(args) > 2 else "")
+        device = self.i2c_devices.get(addr)
+        if device is None:
+            return f"ERR i2c nack at {addr:02X}"
+        device.write(reg, data)
+        return "OK"
 
     def _cmd_stop(self, args) -> str:
         for pin in self.pwm:

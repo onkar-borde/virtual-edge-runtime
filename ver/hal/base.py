@@ -125,6 +125,46 @@ class VirtualMotor(VirtualDevice):
         """Last commanded speed. Not measured — that's an encoder's job."""
 
 
+class VirtualI2C(VirtualDevice):
+    """An I2C bus.
+
+    This is the capability that unlocks the sensor ecosystem: IMUs, ToF
+    rangefinders, magnetometers, OLED displays, servo drivers, barometers.
+    Almost every small sensor worth having speaks I2C.
+
+    Deliberately a *bus*, not a device. Drivers (MPU6050, SSD1306, ...) are
+    written on top of this interface, which means a driver written once runs
+    against a laptop+ESP32 bridge today and a Raspberry Pi's native bus
+    later, unchanged. That's where the portability claim gets paid off:
+    not in blinking an LED, but in never rewriting a sensor driver.
+
+    Note on rates: a bridged bus inherits the transport's latency. Measured
+    at ~40ms round-trip over USB, this is for polling sensors at tens of Hz,
+    not for closing a control loop. If a loop needs to be fast, it belongs
+    on the microcontroller.
+    """
+
+    @abstractmethod
+    def scan(self) -> list[int]:
+        """Addresses that acknowledge on the bus. The first thing to run
+        when a sensor 'doesn't work' -- usually it's wiring or a rival
+        address, and this says which in one call."""
+
+    @abstractmethod
+    def read(self, address: int, register: int, length: int = 1) -> bytes:
+        """Read `length` bytes starting at `register`."""
+
+    @abstractmethod
+    def write(self, address: int, register: int, data: bytes) -> None:
+        """Write `data` starting at `register`."""
+
+    def read_u8(self, address: int, register: int) -> int:
+        return self.read(address, register, 1)[0]
+
+    def write_u8(self, address: int, register: int, value: int) -> None:
+        self.write(address, register, bytes([value & 0xFF]))
+
+
 class Backend(ABC):
     """A platform adapter. Produces devices; owns nothing else."""
 
@@ -153,6 +193,20 @@ class Backend(ABC):
         from .errors import UnsupportedCapability
 
         raise UnsupportedCapability(f"{self.name} backend has no motor")
+
+    def i2c(self, **kwargs) -> VirtualI2C:
+        from .errors import UnsupportedCapability
+
+        raise UnsupportedCapability(f"{self.name} backend has no I2C bus")
+
+    def close(self) -> None:
+        """Release anything the backend itself holds.
+
+        Devices are closed individually, but some backends own a shared
+        resource underneath them -- an ESP32 backend holds one serial port
+        for every device it hands out. Nobody else can close that, because
+        no single device owns it.
+        """
 
     def info(self) -> DeviceInfo:
         return DeviceInfo(backend=self.name, platform=self.platform)

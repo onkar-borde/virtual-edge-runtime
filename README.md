@@ -25,6 +25,39 @@ So: laptop as the brain, a ~₹400 ESP32 as the nervous system, USB in between. 
 
 What's missing from the ecosystem isn't the pattern. It's that nobody packages it as a **reusable abstraction** — every project rebuilds it, hardcoded, single-robot, unportable. That's the gap this fills.
 
+## Drivers vs backends
+
+`ver/drivers/mpu6050.py` is written against `VirtualI2C` and nothing else. It has no idea whether the bus is an ESP32 on USB, a Raspberry Pi's `/dev/i2c-1`, or a simulation.
+
+**A backend knows a platform. A driver knows a chip.** Ship a Pi backend tomorrow and every driver works on it unchanged, with no port and no review. That's where the portability claim actually pays off — not in blinking an LED, but in never rewriting a sensor driver.
+
+```bash
+python -m ver.tools.i2c     # what's on the bus?
+python examples/read_imu.py # real tilt from a real MPU6050
+```
+
+`read_imu.py` hasn't changed since it was written against a *simulated* IMU, before any I2C code existed. The tilt maths doesn't know whether gravity came from `random.gauss()` or a real accelerometer.
+
+### A sleeping chip drops your writes and says OK
+
+Found the hard way, on real silicon, after the code had been read three times and looked correct.
+
+An MPU with the SLEEP bit set **ACKs writes to configuration registers on the bus and silently discards them**. No error, no NACK, no clue — the register just doesn't change. Only `PWR_MGMT_1` still answers, which makes sense: otherwise nothing could ever wake it.
+
+So `MPU6050.open()` wakes before configuring, and that ordering is load-bearing rather than stylistic. Configure first and every setting evaporates while the code looks perfect.
+
+The simulation used to accept writes in any state — **more permissive than the hardware**, which is the exact failure fakes exist to prevent: the test passed against the fake and failed on the board. It models the gating now, so `test_config_writes_are_ignored_while_asleep` fails on `mock` too if anyone regresses it.
+
+`python -m ver.tools.i2cdebug` walks the bus one operation at a time and prints every line in both directions. `VER_DEBUG=1` does the same for any script. This is what the readable ASCII protocol was chosen for: when the code looks right and the hardware disagrees, the wire is the only witness that isn't guessing.
+
+### Chips lie about their names
+
+Boards sold as "MPU6050" routinely carry an MPU-6500 (`WHO_AM_I` 0x70), MPU-9250 (0x71), or MPU-9255 (0x73). They're register-compatible for accel and gyro — Linux's own `inv_mpu6050` driver treats the mismatch as a warning, not an error, for the same reason.
+
+The driver accepts the family and special-cases only the temperature formula, which is the one thing that genuinely differs (`/340 + 36.53` on a 6050, `/333.87 + 21.0` on a 6500 — get it wrong and you're off by ~15°C, plausibly enough to ship).
+
+It still **rejects unknown IDs** rather than trying anyway. Point an IMU driver at an OLED and "try anyway" hands you 14 bytes of display memory parsed as gravity. Plausible-looking wrong numbers are the worst failure mode there is.
+
 ## The demo: perception -> actuation
 
 ```bash
@@ -92,7 +125,7 @@ A platform is "supported" when it passes the HAL conformance suite. Not when it 
 | PWM | ✅ |
 | ADC | ✅ |
 | Camera | ✅ |
-| I2C (IMUs, most sensors) | ❌ |
+| I2C (IMUs, most sensors) | ✅ |
 | SPI (displays, fast ADCs) | ❌ |
 | Encoders / interrupt counting | ❌ |
 | UART passthrough (LiDAR, GPS) | ❌ |
@@ -107,7 +140,7 @@ A platform is "supported" when it passes the HAL conformance suite. Not when it 
 | Backend registry + autodetect | ✅ Done |
 | Laptop backend (camera via OpenCV) | ✅ Done |
 | ESP32 bridge firmware + serial backend | ✅ Done |
-| IMU over I2C (MPU6050) | 🚧 Next |
+| IMU over I2C (MPU6050) | ✅ Done |
 | Raspberry Pi backend | 📋 Planned |
 | Jetson backend | 📋 Planned |
 | Android backend | 📋 Planned |
@@ -117,7 +150,7 @@ A platform is "supported" when it passes the HAL conformance suite. Not when it 
 ```bash
 git clone <repo> && cd virtual-edge-runtime
 pip install -e ".[dev]"
-pytest                      # 132 tests, no hardware required
+pytest                      # 201 tests, no hardware required
 python examples/blink.py
 ```
 

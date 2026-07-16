@@ -161,34 +161,40 @@ class LaptopBackend(Backend):
             self._esp32 = ESP32Backend(port=self.port)
         return self._esp32
 
-    def gpio(self, **kwargs):
+    def _require_bridge(self, what: str) -> None:
         from ..esp32.transport import find_ports
 
         if not find_ports() and self.port is None:
             raise UnsupportedCapability(
-                "a laptop has no GPIO pins of its own, and no ESP32 is "
+                f"a laptop has no {what} of its own, and no ESP32 is "
                 "connected.\n"
                 "  - plug in an ESP32 flashed with ver_bridge, or\n"
                 "  - develop without hardware:  VER_BACKEND=mock\n"
                 "  - check what's connected:    python -m ver.tools.ports"
             )
+
+    def gpio(self, **kwargs):
+        self._require_bridge("GPIO pins")
         return self._bridge().gpio(**kwargs)
 
     def motor(self, **kwargs):
-        from ..esp32.transport import find_ports
-
-        if not find_ports() and self.port is None:
-            raise UnsupportedCapability(
-                "motors need an ESP32 (or similar) on USB. none is connected.\n"
-                "  - for development without hardware:  VER_BACKEND=mock"
-            )
+        self._require_bridge("motor drivers")
         return self._bridge().motor(**kwargs)
 
+    def i2c(self, **kwargs):
+        self._require_bridge("an I2C bus")
+        return self._bridge().i2c(**kwargs)
+
     def imu(self, **kwargs):
-        raise UnsupportedCapability(
-            "no IMU on this laptop, and ver_bridge has no I2C support yet. "
-            "use VER_BACKEND=mock for now."
-        )
+        """A laptop has no IMU. An ESP32 on USB with an MPU6050 wired to it
+        does, and that's what this returns."""
+        self._require_bridge("an IMU")
+        return self._bridge().imu(**kwargs)
+
+    def close(self) -> None:
+        if self._esp32 is not None:
+            self._esp32.close()
+            self._esp32 = None
 
     def info(self) -> DeviceInfo:
         from ..esp32.transport import find_ports

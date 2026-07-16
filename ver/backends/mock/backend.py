@@ -15,7 +15,14 @@ import random
 import time
 from typing import Optional
 
-from ...hal.base import Backend, VirtualCamera, VirtualGPIO, VirtualIMU, VirtualMotor
+from ...hal.base import (
+    Backend,
+    VirtualCamera,
+    VirtualGPIO,
+    VirtualI2C,
+    VirtualIMU,
+    VirtualMotor,
+)
 from ...hal.errors import PinError
 from ...hal.types import DeviceInfo, Frame, ImuReading, PinMode, PinState, Vector3
 
@@ -202,6 +209,48 @@ class MockCamera(_MockDevice, VirtualCamera):
                           details={"resolution": f"{self.width}x{self.height}"})
 
 
+class MockI2C(_MockDevice, VirtualI2C):
+    """A simulated I2C bus with the same simulated chips the fake firmware
+    uses. Sharing them is deliberate: mock and esp32-fake must not drift,
+    and the cheapest way to guarantee that is for there to be only one
+    simulation."""
+
+    def __init__(self, devices=None):
+        super().__init__()
+        from ..esp32.fake_devices import DEFAULT_DEVICES
+
+        cls_list = DEFAULT_DEVICES if devices is None else devices
+        self.devices = {d.address: d for d in (c() for c in cls_list)}
+
+    def scan(self) -> list[int]:
+        self._require_open()
+        return sorted(self.devices)
+
+    def read(self, address: int, register: int, length: int = 1) -> bytes:
+        self._require_open()
+        if not 1 <= length <= 64:
+            raise ValueError(f"length {length} outside 1..64")
+        device = self.devices.get(address)
+        if device is None:
+            from ...hal.errors import DeviceNotFound
+
+            raise DeviceNotFound(f"i2c nack at {address:#04x}")
+        return device.read(register, length)
+
+    def write(self, address: int, register: int, data: bytes) -> None:
+        self._require_open()
+        device = self.devices.get(address)
+        if device is None:
+            from ...hal.errors import DeviceNotFound
+
+            raise DeviceNotFound(f"i2c nack at {address:#04x}")
+        device.write(register, bytes(data))
+
+    def info(self) -> DeviceInfo:
+        return DeviceInfo(backend="mock", platform="any", transport="memory",
+                          details={"devices": [f"{a:#04x}" for a in sorted(self.devices)]})
+
+
 class MockBackend(Backend):
     name = "mock"
     platform = "any"
@@ -215,6 +264,9 @@ class MockBackend(Backend):
 
     def imu(self, **kwargs) -> VirtualIMU:
         return MockIMU(**kwargs)
+
+    def i2c(self, **kwargs) -> VirtualI2C:
+        return MockI2C(**kwargs)
 
     def camera(self, index: int = 0, **kwargs) -> VirtualCamera:
         return MockCamera(**kwargs)

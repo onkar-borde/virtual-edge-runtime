@@ -1,3 +1,3 @@
-from .backend import MockBackend, MockCamera, MockGPIO, MockIMU, MockMotor
+from .backend import MockBackend, MockCamera, MockGPIO, MockI2C, MockIMU, MockMotor
 
-__all__ = ["MockBackend", "MockGPIO", "MockIMU", "MockMotor", "MockCamera"]
+__all__ = ["MockBackend", "MockGPIO", "MockIMU", "MockMotor", "MockCamera", "MockI2C"]

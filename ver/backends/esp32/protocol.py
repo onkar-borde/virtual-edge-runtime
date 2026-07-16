@@ -21,7 +21,16 @@ changes. Nothing above it knows the encoding.
     PWM 18 512 5000     OK
     ADC 34              OK 2048
     STOP                OK
+    I2CINIT 21 22 400   OK
+    I2CSCAN             OK 68 3C
+    I2CREAD 68 3B 6     OK 00FF01AB2C03
+    I2CWRITE 68 6B 00   OK
     (bad command)       ERR unknown command
+
+I2C addresses, registers, and data are hex; pins and frequency are decimal.
+Hex for the bus because that's how every datasheet in the world writes them
+-- 0x68, 0x3C -- and a protocol you can debug by eye should use the same
+notation as the reference you're debugging against.
 
 On boot the device sends `RDY ver_bridge 1` unprompted. The host uses that
 to know the board rebooted and any pin configuration is now gone.
@@ -31,7 +40,7 @@ from __future__ import annotations
 
 from ...hal.types import PinMode
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 FIRMWARE_NAME = "ver_bridge"
 
 # ESP32 ADC and PWM are 12-bit and 10-bit respectively in the Arduino core.
@@ -40,6 +49,11 @@ PWM_MAX = 1023
 ADC_MAX = 4095
 
 BAUD = 115200
+
+# I2C defaults for a standard ESP32 devkit.
+I2C_SDA = 21
+I2C_SCL = 22
+I2C_KHZ = 400
 
 # Anything above this and we assume the board is wedged or unplugged.
 DEFAULT_TIMEOUT = 1.0
@@ -76,6 +90,22 @@ def encode(command: str, *args) -> str:
     parts = [command]
     parts.extend(str(a) for a in args)
     return " ".join(parts)
+
+
+def bytes_to_wire(data: bytes) -> str:
+    """b'\x00\xff' -> '00FF'"""
+    return data.hex().upper()
+
+
+def bytes_from_wire(text: str) -> bytes:
+    """'00FF' -> b'\x00\xff'. Empty string is a legal empty read."""
+    text = (text or "").strip()
+    if not text:
+        return b""
+    try:
+        return bytes.fromhex(text)
+    except ValueError:
+        raise ProtocolError(f"malformed hex payload: {text!r}") from None
 
 
 class ProtocolError(Exception):
