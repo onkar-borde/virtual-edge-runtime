@@ -38,6 +38,24 @@ An ESP32 has 520KB of RAM; YOLOv8n's weights alone are ~6MB — it will never ru
 
 **The compute and the pins sit on opposite sides of the HAL, and neither knows the other exists.** `track_and_actuate.py` contains no `serial`, no COM port, no mention of an ESP32 — it asks the runtime for a camera and some pins. That's the difference between this and an Arduino sketch: not the blinking, the fact that a neural net on a CUDA GPU is driving the pin and nothing had to be rewritten to make that true.
 
+### Measured latency, and why the architecture is shaped this way
+
+Profiled on a CP210x ESP32 devkit under Windows:
+
+| stage | ms/frame |
+|---|---|
+| camera wait | 0.0 |
+| YOLOv8n inference (GTX 1650 Ti, 480px) | 11.8 |
+| preview draw | 1.4 |
+| **PWM round-trip over USB** | **40.0** |
+
+The serial payload is 15 bytes — 1.3ms of transmission at 115200. The other ~38ms is USB latency, because Windows defaults the CP210x latency timer to 16ms per direction. **Raising the baud rate does nothing**; the wire is idle almost the whole time.
+
+Two consequences, and they're the whole design:
+
+1. **Actuation belongs off the perception loop.** Blocking a 12ms GPU on a 40ms round-trip drags a 53fps pipeline to 22fps. `track_and_actuate.py` runs the writes on their own thread — perception rate and control rate are different problems with different deadlines.
+2. **You cannot close a control loop over this link.** A PID at 25Hz will oscillate a motor. That isn't a flaw in the bridge — it's exactly why real-time control lives *on the microcontroller* and the host does perception and decisions. The measurement doesn't undermine the architecture; it's the reason for it.
+
 ## Conformance: the abstraction is measured, not claimed
 
 `tests/test_conformance.py` runs **one set of assertions against every backend**:
