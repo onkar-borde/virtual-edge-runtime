@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "virtual-edge-runtime"
+version = "0.1.0"
+description = "Write edge AI and robotics code once; run it on a laptop, ESP32 bridge, Raspberry Pi, or Jetson."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+laptop = ["pyserial>=3.5", "opencv-python>=4.8", "numpy>=1.24"]
+dev = ["pytest>=7.0", "numpy>=1.24"]
+
+[tool.setuptools.packages.find]
+include = ["ver*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

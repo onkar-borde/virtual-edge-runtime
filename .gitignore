@@ -1,0 +1,26 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# virtual environments -- never commit these. they're machine-specific and huge.
+.venv/
+venv/
+env/
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# arduino build artifacts
+firmware/**/build/
+*.bin
+*.elf
+
+# os junk
+Thumbs.db
+.DS_Store

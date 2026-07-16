@@ -1,0 +1,53 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The core suite: no OpenCV, no pyserial, no board. Proves the mock
+  # backend really is a complete fallback and that nothing in the HAL
+  # secretly needs hardware libraries to import.
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  # With the hardware libraries present but no board attached. This is the
+  # configuration the author's laptop runs in when the ESP32 is unplugged,
+  # and it exercises the laptop backend, the serial transport tests, and
+  # the fake-firmware path.
+  with-hardware-libs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      # headless build: same cv2 API, no libGL, which CI runners lack.
+      - run: pip install opencv-python-headless pyserial
+      - run: pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      # Don't fail the build on style yet -- the suite is the gate.
+      - run: ruff check . || true
