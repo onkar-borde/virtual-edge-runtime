@@ -25,6 +25,19 @@ So: laptop as the brain, a ~₹400 ESP32 as the nervous system, USB in between. 
 
 What's missing from the ecosystem isn't the pattern. It's that nobody packages it as a **reusable abstraction** — every project rebuilds it, hardcoded, single-robot, unportable. That's the gap this fills.
 
+## The demo: perception -> actuation
+
+```bash
+pip install -e ".[vision]"
+python examples/track_and_actuate.py
+```
+
+Webcam -> YOLOv8 on the GPU -> PWM an LED by detection confidence. Wave at the laptop, the LED brightens.
+
+An ESP32 has 520KB of RAM; YOLOv8n's weights alone are ~6MB — it will never run this. A Pi 5 manages ~3-5 fps at 640px, and fixing that means a Hailo accelerator for roughly the price of the Pi again. A mid-range laptop GPU does 30+ fps and already exists.
+
+**The compute and the pins sit on opposite sides of the HAL, and neither knows the other exists.** `track_and_actuate.py` contains no `serial`, no COM port, no mention of an ESP32 — it asks the runtime for a camera and some pins. That's the difference between this and an Arduino sketch: not the blinking, the fact that a neural net on a CUDA GPU is driving the pin and nothing had to be rewritten to make that true.
+
 ## Conformance: the abstraction is measured, not claimed
 
 `tests/test_conformance.py` runs **one set of assertions against every backend**:

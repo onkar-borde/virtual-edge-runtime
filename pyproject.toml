@@ -13,6 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 laptop = ["pyserial>=3.5", "opencv-python>=4.8", "numpy>=1.24"]
+vision = ["ultralytics>=8.0", "pyserial>=3.5", "opencv-python>=4.8"]
 dev = ["pytest>=7.0", "numpy>=1.24"]
 
 [tool.setuptools.packages.find]
